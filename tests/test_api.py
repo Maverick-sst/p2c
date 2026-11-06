@@ -18,5 +18,13 @@ def test_health_pairing_and_authorized_catalog(tmp_path, monkeypatch):
         assert catalog.status_code == 200
         assert {item["key"] for item in catalog.json()["commands"]} == {"01", "02", "03"}
         assert client.post("/api/v1/commands/unknown/runs", json={"source": "dashboard"}).status_code == 404
+        headers = {"Idempotency-Key": "test-run-key-0001"}
+        first = client.post("/api/v1/commands/system.network/runs",
+                            json={"source": "dashboard"}, headers=headers)
+        assert first.status_code == 202
+        second = client.post("/api/v1/commands/system.network/runs",
+                             json={"source": "dashboard"}, headers=headers)
+        assert second.status_code == 202
+        assert second.json()["run"]["id"] == first.json()["run"]["id"]
         assert client.post("/api/v1/auth/logout").status_code == 204
         assert client.get("/api/v1/commands").status_code == 401
