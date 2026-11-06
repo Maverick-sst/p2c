@@ -123,6 +123,8 @@ async def start_run(command_id: str, payload: RunRequest, request: Request, sess
         raise HTTPException(status_code=400, detail="A valid Idempotency-Key header is required")
     existing = storage.get_run_by_idempotency(idempotency_key)
     if existing:
+        if existing["command_id"] != command.id or existing["source"] != payload.source:
+            raise HTTPException(status_code=409, detail="Idempotency key was already used for a different request")
         return {"run": run_json(existing)}
     if app.state.executor_busy:
         raise HTTPException(status_code=409, detail="Another command is already running")
