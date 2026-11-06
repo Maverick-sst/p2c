@@ -10,13 +10,13 @@ The Mac runs the webhook service locally and exposes it only through the tunnel.
 
 ## Status
 
-This repository contains the implementation scaffold and automated tests. Live telephony, number reachability from India, Twilio credentials, and macOS runtime behavior must be verified by the owner.
+This repository contains the initial MVP implementation, automated tests, setup instructions, security notes, and a macOS LaunchAgent example. Live telephony, number reachability from India, Twilio credentials, and macOS runtime behavior must be verified by the owner.
 
 ## Quick start
 
 1. Use Python 3.11 or newer.
 2. Create a virtual environment and install dependencies from requirements.txt.
-3. Copy .env.example to .env and fill in Twilio credentials, your E.164 caller number, a strong PIN, and the public HTTPS tunnel URL.
+3. Copy .env.example to .env and fill in the Twilio Auth Token, your E.164 caller number, a unique six-digit PIN, and the public HTTPS tunnel URL.
 4. Start the app with make run.
 5. Start ngrok with ngrok http 8000.
 6. Configure the Twilio number's incoming Voice webhook to https://<your-tunnel>/voice using HTTP POST.
