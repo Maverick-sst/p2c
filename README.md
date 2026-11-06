@@ -1,50 +1,101 @@
-# P2C — Phone-to-Computer
+# P2C — Phone-to-Computer (Local-first v2)
 
-Control a small, explicitly allowlisted set of local macOS tasks by calling a Twilio Voice number and entering DTMF digits.
+P2C is a self-hosted remote control for your Mac. Open its web interface on your Android phone over the same trusted local network, then launch predefined diagnostic tasks from a dashboard or numeric keypad.
 
-## Architecture
+**No Twilio, SIP trunk, Asterisk, VPS, cloud API, API key or recurring subscription.**
 
-Phone call → Twilio Programmable Voice → HTTPS tunnel (ngrok during development) → FastAPI on your Mac → authenticated call session → allowlisted Python script.
+P2C v2 does not receive ordinary cellular phone calls. Cellular/PSTN access requires a carrier connection or telephony hardware, which conflicts with the zero-subscription/no-hardware requirement. The keypad is an in-app command keypad, not telephone DTMF.
 
-The Mac runs the webhook service locally and exposes it only through the tunnel. No arbitrary shell commands are accepted, and no public endpoint accepts a command string.
+## Features
 
-## Status
+- Hybrid dashboard and two-digit keypad.
+- One-time pairing code displayed on the Mac.
+- Revocable, expiring browser sessions.
+- Authenticated HTTP API and WebSocket run updates.
+- SQLite run history and audit events.
+- Static allowlist of read-only diagnostic scripts.
+- Local-only operation; no public tunnel or port forwarding.
 
-This repository contains the initial MVP implementation, automated tests, setup instructions, security notes, and a macOS LaunchAgent example. Live telephony, number reachability from India, Twilio credentials, and macOS runtime behavior must be verified by the owner.
+## Requirements
+
+- macOS with Python 3.11+.
+- Node.js 20+ and npm, only to build the frontend.
+- Android phone or another browser on the same trusted Wi-Fi network.
+- No external service or paid account.
 
 ## Quick start
 
-1. Use Python 3.11 or newer.
-2. Create a virtual environment and install dependencies from requirements.txt.
-3. Copy .env.example to .env and fill in the Twilio Auth Token, your E.164 caller number, a unique six-digit PIN, and the public HTTPS tunnel URL.
-4. Start the app with make run.
-5. Start ngrok with ngrok http 8000.
-6. Configure the Twilio number's incoming Voice webhook to https://<your-tunnel>/voice using HTTP POST.
-7. Call the Twilio number, enter your PIN, then choose an allowlisted task.
+From the repository root:
 
-See docs/TWILIO_SETUP.md, docs/SECURITY.md, and docs/MACOS_SETUP.md.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+make install
+make frontend-install
+make frontend-build
+```
 
-## Important
+Create a one-time pairing code in one terminal:
 
-- Twilio does not currently offer local or mobile Indian numbers. You need a supported international voice number, and you must test whether your Indian carrier can reach it (international dialing/ISD may need to be enabled). Number availability and inbound reachability are separate checks.
-- Do not commit .env or share your Auth Token.
-- The in-memory call-session store is intended for a single local process/MVP. Do not run multiple workers or use this as a production remote administration service.
-- Only scripts explicitly registered in app/commands.py can run. Never add an arbitrary shell-command endpoint.
-- The app binds to 127.0.0.1; expose it through a narrowly scoped HTTPS tunnel, not a router port-forward.
+```bash
+make pair
+```
 
-## Commands
+Start the server in another terminal:
 
-| Key | Task |
-|---|---|
-| 1 | System summary |
-| 2 | Disk usage |
-| 3 | Network summary |
-| 9 | End call |
+```bash
+make run-lan
+```
+
+The terminal prints the local URL, typically `http://<mac-lan-ip>:8000`. Open that address on the phone and enter the pairing code. The code expires quickly and can be used once.
+
+For Mac-only browser testing, use `make run` and open `http://127.0.0.1:8000`.
+
+## Using P2C
+
+- Dashboard: tap System status, Disk usage or Network status.
+- Keypad: enter `01`, `02` or `03`, then press `#`.
+- Press `*` to clear the keypad.
+- View execution status, output and recent history in the app.
+
+## Security and network limitations
+
+- LAN mode binds to the Mac's primary LAN address, not all interfaces.
+- Use only on a trusted private network. Plain HTTP does not encrypt session cookies; anyone able to observe traffic on that network may be able to steal a session.
+- Do not use public Wi-Fi. Do not configure router port forwarding or expose port 8000 to the internet.
+- The initial MVP uses a same-origin HttpOnly, SameSite=Strict cookie. Configure local HTTPS and `P2C_COOKIE_SECURE=1` before using it on less-trusted networks.
+- Pairing code is one-time and short-lived. Use `make pair` to rotate it.
+- Commands run as your logged-in macOS user. Only three read-only commands are enabled. Do not add arbitrary shell execution.
+- The app is single-user and single-process. Run one Uvicorn worker.
+- Mac must remain awake and the service running. Phone and Mac need LAN connectivity.
+
+## Local administration
+
+Revoke every paired device:
+
+```bash
+python3 -m app.cli revoke-all
+```
+
+Create a new pairing code:
+
+```bash
+python3 -m app.cli pair
+```
 
 ## Development
 
-    make install
-    make test
-    make run
+```bash
+make test
+make lint
+```
 
-The test suite validates command allowlisting, caller/PIN checks, and basic application behavior. It does not replace a live Twilio call test.
+Frontend source is in `frontend/`; run `npm run dev -- --host 127.0.0.1` there for UI work. The production build is served by FastAPI from `frontend/dist`.
+
+## Project docs
+
+- [Local-first architecture](docs/LOCAL_FIRST_ARCHITECTURE.md)
+- [API contracts](docs/API_CONTRACTS.md)
+- [Migration plan](docs/MIGRATION_PLAN.md)
+- [Security model](docs/SECURITY.md)
+- [macOS setup](docs/MACOS_SETUP.md)
