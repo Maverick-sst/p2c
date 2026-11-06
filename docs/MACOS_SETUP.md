@@ -1,29 +1,60 @@
 # macOS setup
 
-## Runtime
+## Requirements
 
-Use Python 3.11+ and a dedicated virtual environment. From the repository root:
+- macOS
+- Python 3.11+
+- Node.js 20+ and npm (frontend build only)
 
-    python3 -m venv .venv
-    source .venv/bin/activate
-    make install
-    cp .env.example .env
+## Install and build
 
-Edit .env with your real Twilio Auth Token, public HTTPS tunnel URL, your caller ID in E.164 format, and a unique 6–8 digit PIN.
+```bash
+git clone https://github.com/Maverick-sst/p2c.git
+cd p2c
+git checkout feat/local-first-hybrid
+python3 -m venv .venv
+source .venv/bin/activate
+make install
+make frontend-install
+make frontend-build
+```
 
-## Start manually first
+## Pair and run
 
-    make test
-    make run
+Terminal 1:
 
-In another terminal:
+```bash
+make pair
+```
 
-    ngrok http 8000
+Terminal 2:
 
-Open http://127.0.0.1:8000/health and confirm {"status":"ok","service":"p2c"}.
+```bash
+make run-lan
+```
 
-## LaunchAgent (optional, after manual testing)
+Open the printed local URL on your Android phone while both devices are connected to the same trusted Wi-Fi network. Enter the one-time code printed by the pairing command.
 
-A sample plist is provided in launchd. Replace every placeholder path and username with the actual absolute path on your Mac. Keep the environment file private. Load the LaunchAgent only after the manual app and live call test succeeds.
+For a Mac-only smoke test, run `make run` and open `http://127.0.0.1:8000`.
 
-The sample LaunchAgent starts Uvicorn on localhost. It does not start ngrok; start and supervise the tunnel separately.
+## Stop and revoke
+
+Stop the service with Ctrl+C. Revoke all paired sessions with:
+
+```bash
+python3 -m app.cli revoke-all
+```
+
+## Network troubleshooting
+
+- Confirm phone and Mac are on the same Wi-Fi and the router does not enable client isolation.
+- Check the Mac's local IP with System Settings → Network.
+- macOS may ask whether Python/Uvicorn can accept incoming connections; allow it on the private network.
+- A phone hotspot may isolate connected clients or prevent access to the host; test it on the actual devices.
+- Do not use router port forwarding, public tunnels or public Wi-Fi.
+
+## HTTPS and startup
+
+The initial local prototype uses HTTP on a trusted LAN. This is not suitable for hostile networks because browser session cookies are not encrypted in transit. Add a locally trusted HTTPS certificate and set `P2C_COOKIE_SECURE=1` before using P2C outside a trusted private network.
+
+Configure a LaunchAgent only after manual startup and phone pairing have been tested. The first release intentionally starts manually so the user can see the pairing URL and service state.
