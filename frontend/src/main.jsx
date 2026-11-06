@@ -80,8 +80,9 @@ function App() {
         }
         if (message.type === "run.completed") refreshRuns();
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (stopped) return;
+        if (event.code === 4401) { load(); return; }
         reconnectRef.current += 1;
         setConnection("reconnecting");
         timer = setTimeout(connect, Math.min(10000, 500 * (2 ** Math.min(reconnectRef.current, 5))));
@@ -90,7 +91,7 @@ function App() {
     };
     connect();
     return () => { stopped = true; clearTimeout(timer); socket?.close(); };
-  }, [device, refreshRuns]);
+  }, [device, refreshRuns, load]);
 
   const byKey = useMemo(() => Object.fromEntries(commands.map((c) => [c.key, c])), [commands]);
   const busy = activeRun && ["queued", "running"].includes(activeRun.status);
