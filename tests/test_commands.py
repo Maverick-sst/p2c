@@ -1,17 +1,18 @@
-from app.commands import COMMANDS, get_command
+from app.commands import COMMANDS, get_command, get_command_by_key
 
 
-def test_only_expected_keys_are_registered():
-    assert set(COMMANDS) == {"1", "2", "3"}
+def test_registry_has_only_three_read_only_commands():
+    assert set(COMMANDS) == {"system.status", "system.disk", "system.network"}
+    assert all(command.risk == "read_only" for command in COMMANDS.values())
 
 
-def test_unknown_or_shell_like_input_is_rejected():
-    assert get_command("9") is None
-    assert get_command("1; rm -rf /") is None
-    assert get_command("whoami") is None
-
-
-def test_registered_scripts_are_inside_scripts_directory():
+def test_dashboard_and_keypad_resolve_same_commands():
     for command in COMMANDS.values():
-        assert command.script.parent.name == "scripts"
-        assert command.script.suffix == ".py"
+        assert get_command(command.id) == get_command_by_key(command.key)
+
+
+def test_unknown_ids_and_codes_are_rejected():
+    assert get_command("whoami") is None
+    assert get_command("../scripts/system_status.py") is None
+    assert get_command_by_key("1; rm -rf /") is None
+    assert get_command_by_key("99") is None
