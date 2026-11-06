@@ -81,13 +81,13 @@ def create_pairing_code(code_hash, expires_at):
 
 def claim_pairing_code(code_hash, device_id, device_name, now, token_hash, session_expires):
     with connection() as db:
-        row = db.execute(
-            "SELECT code_hash FROM pairing_codes WHERE code_hash=? AND consumed_at IS NULL AND expires_at>?",
-            (code_hash, now)
-        ).fetchone()
-        if row is None:
+        cursor = db.execute(
+            "UPDATE pairing_codes SET consumed_at=? "
+            "WHERE code_hash=? AND consumed_at IS NULL AND expires_at>?",
+            (now, code_hash, now)
+        )
+        if cursor.rowcount != 1:
             return False
-        db.execute("UPDATE pairing_codes SET consumed_at=? WHERE code_hash=?", (now, code_hash))
         db.execute("INSERT INTO devices(id,name,paired_at) VALUES(?,?,?)", (device_id, device_name, now))
         db.execute("INSERT INTO sessions(token_hash,device_id,created_at,expires_at) VALUES(?,?,?,?)",
                    (token_hash, device_id, now, session_expires))
@@ -119,6 +119,7 @@ def revoke_all_devices(now):
 
 
 def create_run(run):
+    run.setdefault("idempotency_key", None)
     with connection() as db:
         db.execute(
             "INSERT INTO runs(id,command_id,source,status,created_at,idempotency_key) "
