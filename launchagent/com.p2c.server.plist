@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.p2c.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/ABSOLUTE/PATH/TO/p2c/.venv/bin/python</string>
+    <string>-m</string>
+    <string>app.cli</string>
+    <string>serve</string>
+    <string>--lan</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/ABSOLUTE/PATH/TO/p2c</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/USERNAME/.p2c/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/USERNAME/.p2c/server-error.log</string>
+</dict>
+</plist>
