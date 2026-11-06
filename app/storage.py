@@ -42,7 +42,7 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY, command_id TEXT NOT NULL, source TEXT NOT NULL,
-            status TEXT NOT NULL, exit_code INTEGER, output TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL, idempotency_key TEXT UNIQUE, exit_code INTEGER, output TEXT NOT NULL DEFAULT '',
             output_truncated INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER,
             created_at REAL NOT NULL, finished_at REAL
         );
@@ -53,6 +53,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
         CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC);
         """)
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
+        if "idempotency_key" not in columns:
+            db.execute("ALTER TABLE runs ADD COLUMN idempotency_key TEXT")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_idempotency ON runs(idempotency_key)")
 
 
 def recover_stale_runs():
@@ -116,7 +120,16 @@ def revoke_all_devices(now):
 
 def create_run(run):
     with connection() as db:
-        db.execute("INSERT INTO runs(id,command_id,source,status,created_at) VALUES(:id,:command_id,:source,:status,:created_at)", run)
+        db.execute(
+            "INSERT INTO runs(id,command_id,source,status,created_at,idempotency_key) "
+            "VALUES(:id,:command_id,:source,:status,:created_at,:idempotency_key)", run
+        )
+
+
+def get_run_by_idempotency(key):
+    with connection() as db:
+        row = db.execute("SELECT * FROM runs WHERE idempotency_key=?", (key,)).fetchone()
+        return dict(row) if row else None
 
 
 def update_run(run_id, **fields):
