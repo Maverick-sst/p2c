@@ -34,8 +34,8 @@ class Settings:
             raise RuntimeError("ALLOWED_PHONE must be an E.164 number")
 
         pin = os.environ["ACCESS_PIN"]
-        if not pin.isdigit() or not 6 <= len(pin) <= 8:
-            raise RuntimeError("ACCESS_PIN must contain 6 to 8 digits")
+        if not pin.isdigit() or len(pin) != 6:
+            raise RuntimeError("ACCESS_PIN must contain exactly 6 digits")
 
         return cls(
             twilio_auth_token=os.environ["TWILIO_AUTH_TOKEN"],
