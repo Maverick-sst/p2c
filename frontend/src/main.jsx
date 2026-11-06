@@ -93,6 +93,12 @@ function App() {
     return () => { stopped = true; clearTimeout(timer); socket?.close(); };
   }, [device, refreshRuns, load]);
 
+  useEffect(() => {
+    if (!activeRun || !["queued", "running"].includes(activeRun.status)) return undefined;
+    const timer = setInterval(refreshRuns, 2000);
+    return () => clearInterval(timer);
+  }, [activeRun?.id, activeRun?.status, refreshRuns]);
+
   const byKey = useMemo(() => Object.fromEntries(commands.map((c) => [c.key, c])), [commands]);
   const busy = activeRun && ["queued", "running"].includes(activeRun.status);
 
