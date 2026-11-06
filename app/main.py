@@ -118,14 +118,14 @@ async def start_run(command_id: str, payload: RunRequest, request: Request, sess
     command = get_command(command_id)
     if not command:
         raise HTTPException(status_code=404, detail="Command not found")
-    if app.state.executor_busy:
-        raise HTTPException(status_code=409, detail="Another command is already running")
     idempotency_key = request.headers.get("Idempotency-Key", "")
     if len(idempotency_key) < 8 or len(idempotency_key) > 128:
         raise HTTPException(status_code=400, detail="A valid Idempotency-Key header is required")
     existing = storage.get_run_by_idempotency(idempotency_key)
     if existing:
         return {"run": run_json(existing)}
+    if app.state.executor_busy:
+        raise HTTPException(status_code=409, detail="Another command is already running")
     run_id = "run_" + uuid.uuid4().hex[:20]
     created = time.time()
     storage.create_run({"id": run_id, "command_id": command.id, "source": payload.source,
