@@ -114,7 +114,7 @@ Request:
 { "source": "dashboard" }
 ```
 
-For keypad submissions, `command_id` is resolved from the server-side keypad mapping before this endpoint is called. Do not accept a raw code as an executable instruction.
+For keypad submissions, the UI resolves the two-digit code using the server-provided command catalogue, then submits the stable command ID. The API revalidates that ID against the server registry. Never accept a raw code as an executable instruction.
 
 Response (202 Accepted):
 ```json
