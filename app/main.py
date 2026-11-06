@@ -4,12 +4,10 @@ import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
-
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-
 from app import storage
 from app.auth import claim_pairing, clear_session_cookie, current_session, digest, require_same_origin, set_session_cookie
 from app.commands import get_command, public_commands
@@ -46,6 +44,7 @@ def run_json(row):
 @app.on_event("startup")
 async def startup():
     storage.init_db()
+    storage.recover_stale_runs()
     app.state.executor_busy = False
 
 
@@ -59,7 +58,7 @@ async def pairing_status():
     from app.config import DB_PATH
     if not DB_PATH.exists():
         return {"pairing_open": False, "expires_at": None}
-    with storage.connect() as db:
+    with storage.connection() as db:
         row = db.execute(
             "SELECT expires_at FROM pairing_codes WHERE consumed_at IS NULL AND expires_at>? ORDER BY expires_at DESC LIMIT 1",
             (time.time(),),
@@ -78,7 +77,8 @@ async def pairing_claim(payload: PairRequest, request: Request):
     failures = [stamp for stamp in _pair_failures.get(peer, []) if now - stamp < 300]
     if len(failures) >= 8:
         raise HTTPException(status_code=429, detail="Too many pairing attempts")
-    result = claim_pairing(payload.pairing_code, payload.device_name.strip())
+    device_name = payload.device_name.strip() or "Phone"
+    result = claim_pairing(payload.pairing_code, device_name)
     if not result:
         failures.append(now)
         _pair_failures[peer] = failures
@@ -130,6 +130,8 @@ async def start_run(command_id: str, payload: RunRequest, request: Request, sess
     async def task():
         try:
             await execute(run_id, command, hub.publish)
+            row = storage.get_run(run_id)
+            storage.audit("command.finished", session["device_id"], command.id + ":" + row["status"])
         finally:
             app.state.executor_busy = False
 
