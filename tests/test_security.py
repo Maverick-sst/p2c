@@ -1,3 +1,5 @@
+from twilio.request_validator import RequestValidator
+
 from app.security import CallSecurity
 
 
@@ -30,3 +32,14 @@ def test_session_authentication_and_close():
     assert security.is_authenticated("CA-test")
     security.close_session("CA-test")
     assert not security.is_authenticated("CA-test")
+
+
+def test_twilio_signature_validation():
+    security = make_security()
+    validator = RequestValidator("test-auth-token")
+    url = "https://example.ngrok.app/voice"
+    params = {"CallSid": "CA123", "From": "+919999999999"}
+    signature = validator.compute_signature(url, params)
+
+    assert security.valid_twilio_signature(url, params, signature)
+    assert not security.valid_twilio_signature(url, params, "not-a-valid-signature")
