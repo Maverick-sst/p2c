@@ -2,17 +2,26 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
+
 const API = "/api/v1";
+
 async function api(path, options = {}) {
   const response = await fetch(API + path, {
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
   });
+
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || body.error?.message || "Request failed (" + response.status + ")");
+    throw new Error(
+      body.detail || body.error?.message || "Request failed (" + response.status + ")"
+    );
   }
+
   return response.status === 204 ? null : response.json();
 }
 
