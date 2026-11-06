@@ -62,8 +62,8 @@ Not yet verified:
 - [x] Twilio dependency removed from requirements.
 - [x] Twilio-only configuration removed from the active application.
 - [x] README and macOS setup rewritten for local-first use.
-- [ ] Remove obsolete Twilio-only source/docs from this branch after final audit.
-- [ ] Execute backend tests and frontend build in CI.
+- [x] Remove obsolete Twilio-only source/docs from the active branch.
+- [ ] Confirm backend tests and frontend build pass in CI (workflow configured; result not yet available).
 - [ ] Complete physical Mac + Android smoke test.
 
 ## Repository layout
