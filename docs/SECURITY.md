@@ -1,17 +1,39 @@
-# Security model and limitations
+# P2C local security model
 
-- The app binds to 127.0.0.1. Do not bind it to 0.0.0.0 or create router port forwards for this MVP.
-- Twilio's X-Twilio-Signature is validated against the externally visible HTTPS URL and submitted form parameters.
-- The caller number must exactly match ALLOWED_PHONE and the caller must enter ACCESS_PIN.
-- The PIN is compared in constant time and failed attempts are limited in process memory.
-- Call sessions expire and are tied to Twilio CallSid.
-- DTMF keys map to a static allowlist. No caller-supplied command, path, argument, or shell expression is accepted.
-- Scripts execute with the permissions of the macOS user running the app. Keep that account unprivileged and avoid adding destructive tasks.
-- Keep .env private. Rotate the Twilio Auth Token if it is exposed.
-- Use a long random PIN dedicated to this project. Do not use a banking, Apple ID, or device unlock PIN.
+## Threat model
 
-## MVP limitations
+P2C is a single-user local-network convenience tool. It is not an internet-facing remote administration service. The main risks are an untrusted device on the same LAN, a stolen paired phone, accidental command expansion, and sensitive diagnostic output.
 
-The session and PIN attempt stores are in-memory. A restart clears them, and multiple Uvicorn workers would not share them. Run one worker only. Before production or unattended use, move state to Redis/SQLite with atomic rate limits, add request replay protection and audit persistence, and consider a dedicated least-privilege macOS account.
+## Controls
 
-Caller ID is not strong authentication by itself. The PIN is required, but DTMF is not end-to-end encrypted as a secret channel. Do not use this system for sensitive or destructive operations.
+- Pairing code is generated on the Mac, has a short expiry, is one-time and stored only as a SHA-256 digest.
+- Browser sessions use high-entropy random tokens. Only token digests are stored in SQLite.
+- Session cookies are HttpOnly and SameSite=Strict; enable Secure when using local HTTPS.
+- Pairing attempts are rate-limited per source IP in the running process.
+- Every API and WebSocket connection requires a valid paired session.
+- State-changing requests validate same-origin when the browser supplies an Origin header.
+- The WebSocket validates its Origin and authenticates using the session cookie.
+- Commands resolve only through a fixed server-side registry. No client-supplied executable, path, shell string or arbitrary arguments are accepted.
+- The executor uses create_subprocess_exec, a fixed Python interpreter, fixed working directory, restricted environment, per-command timeout and bounded returned output.
+- SQLite records command runs and audit events.
+- Only read-only system, disk and network diagnostics are enabled.
+
+## Operational rules
+
+1. Use LAN mode only on a trusted private network.
+2. Never port-forward the P2C port or expose it through a public tunnel.
+3. Plain HTTP on a LAN is not encrypted. Do not use public Wi-Fi. Local HTTPS is required before broader deployment.
+4. Set P2C_COOKIE_SECURE=1 when serving over HTTPS.
+5. Revoke devices with python -m app.cli revoke-all if a phone is lost.
+6. Keep the Mac account non-admin for routine operation where practical.
+7. Do not add destructive commands or arbitrary terminal access to the MVP.
+8. Keep Uvicorn to one worker; the WebSocket hub and execution lock are process-local.
+
+## Known MVP limitations
+
+- The per-IP pairing throttle is in-memory and resets on restart.
+- Session expiry is enforced on each request, but there is no background cleanup job.
+- A command is single-flight and the current run manager is in-process. A service restart marks unfinished runs failed.
+- Output is capped after process completion; the three built-in scripts are small, bounded diagnostics. Do not register untrusted or high-output scripts.
+- Plain LAN HTTP exposes session cookies to network observers. Local HTTPS and trusted certificate setup remain deployment work.
+- The first release does not implement multi-user roles, internet access, remote wake, or cellular telephony.
