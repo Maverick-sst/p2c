@@ -1,194 +1,196 @@
-"""Twilio Voice webhook application for the P2C local macOS agent."""
-from __future__ import annotations
-
+"""Local-first P2C API and static frontend host."""
 import asyncio
-import logging
-import sys
+import time
+import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response
-from twilio.twiml.voice_response import Gather, VoiceResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-from app.commands import get_command
-from app.config import Settings
-from app.security import CallSecurity
+from app import storage
+from app.auth import claim_pairing, clear_session_cookie, current_session, digest, require_same_origin, set_session_cookie
+from app.commands import get_command, public_commands
+from app.config import APP_VERSION, COOKIE_NAME
+from app.executor import execute
+from app.realtime import EventHub
 
-load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("p2c")
-
-settings = Settings.from_env()
-security = CallSecurity(
-    auth_token=settings.twilio_auth_token,
-    allowed_phone=settings.allowed_phone,
-    access_pin=settings.access_pin,
-    max_pin_attempts=settings.max_pin_attempts,
-    session_ttl_seconds=settings.session_ttl_seconds,
-)
-
-app = FastAPI(title="P2C — Phone to Computer", version="0.1.0")
+app = FastAPI(title="P2C — Local Mac Remote", version=APP_VERSION)
+hub = EventHub()
+frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+if (frontend_dist / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
 
 
-def xml(response: VoiceResponse) -> Response:
-    return Response(content=str(response), media_type="application/xml")
+class PairRequest(BaseModel):
+    pairing_code: str = Field(min_length=6, max_length=32)
+    device_name: str = Field(default="Phone", min_length=1, max_length=40)
 
 
-def callback_url(path: str) -> str:
-    return f"{settings.public_base_url}{path}"
+class RunRequest(BaseModel):
+    source: str = Field(pattern="^(dashboard|keypad)$")
 
 
-async def validated_form(request: Request):
-    form = await request.form()
-    # Twilio signs the externally visible URL, not the localhost URL behind ngrok.
-    external_url = callback_url(request.url.path)
-    if request.url.query:
-        external_url += "?" + request.url.query
-    signature = request.headers.get("X-Twilio-Signature")
-    if not security.valid_twilio_signature(external_url, dict(form), signature):
-        logger.warning("Rejected webhook with invalid Twilio signature")
-        raise HTTPException(status_code=403, detail="Invalid webhook signature")
-    return form
+def run_json(row):
+    return {
+        "id": row["id"], "command_id": row["command_id"], "status": row["status"],
+        "exit_code": row["exit_code"], "output": row["output"],
+        "output_truncated": bool(row["output_truncated"]),
+        "duration_ms": row["duration_ms"], "created_at": row["created_at"],
+        "finished_at": row["finished_at"],
+    }
 
 
-def say(response: VoiceResponse, message: str) -> None:
-    response.say(message, language=settings.voice_language)
+@app.on_event("startup")
+async def startup():
+    storage.init_db()
+    app.state.executor_busy = False
 
 
-def end_call(response: VoiceResponse, call_sid: str | None = None) -> Response:
-    response.hangup()
-    if call_sid:
-        security.close_session(call_sid)
-    return xml(response)
-
-
-@app.get("/health")
+@app.get("/api/v1/health")
 async def health():
-    return {"status": "ok", "service": "p2c"}
+    return {"status": "ok", "service": "p2c", "version": APP_VERSION}
 
 
-@app.post("/voice")
-async def incoming_call(request: Request):
-    form = await validated_form(request)
-    caller = form.get("From")
-    call_sid = form.get("CallSid")
-    response = VoiceResponse()
-
-    if not security.caller_allowed(caller) or not call_sid:
-        say(response, "This number is not authorized. Goodbye.")
-        return end_call(response)
-
-    security.create_session(call_sid)
-    gather = Gather(
-        input="dtmf",
-        num_digits=6,
-        timeout=8,
-        action=callback_url("/verify-pin"),
-        method="POST",
-        action_on_empty_result=True,
-    )
-    say(gather, "Welcome. Please enter your six digit security PIN.")
-    response.append(gather)
-    say(response, "No PIN received. Goodbye.")
-    return end_call(response, call_sid)
+@app.get("/api/v1/pairing/status")
+async def pairing_status():
+    from app.config import DB_PATH
+    if not DB_PATH.exists():
+        return {"pairing_open": False, "expires_at": None}
+    with storage.connect() as db:
+        row = db.execute(
+            "SELECT expires_at FROM pairing_codes WHERE consumed_at IS NULL AND expires_at>? ORDER BY expires_at DESC LIMIT 1",
+            (time.time(),),
+        ).fetchone()
+    return {"pairing_open": bool(row), "expires_at": row["expires_at"] if row else None}
 
 
-@app.post("/verify-pin")
-async def verify_pin(request: Request):
-    form = await validated_form(request)
-    call_sid = form.get("CallSid", "")
-    caller = form.get("From", "")
-    digits = form.get("Digits", "")
-    response = VoiceResponse()
-
-    if not security.is_authenticated(call_sid) and call_sid not in security.sessions:
-        say(response, "This call session has expired. Goodbye.")
-        return end_call(response, call_sid)
-
-    if not security.caller_allowed(caller) or not security.verify_pin(digits, caller):
-        say(response, "Authentication failed. Goodbye.")
-        logger.warning("PIN authentication failed for call %s", call_sid)
-        return end_call(response, call_sid)
-
-    security.authenticate_session(call_sid)
-    gather = Gather(
-        input="dtmf",
-        num_digits=1,
-        timeout=10,
-        action=callback_url("/execute"),
-        method="POST",
-        action_on_empty_result=True,
-    )
-    say(
-        gather,
-        "Authentication successful. Press 1 for system summary. "
-        "Press 2 for disk usage. Press 3 for network summary. "
-        "Press 9 to end the call.",
-    )
-    response.append(gather)
-    say(response, "No selection received. Goodbye.")
-    return end_call(response, call_sid)
+_pair_failures = {}
 
 
-async def run_allowlisted_script(script: Path) -> tuple[int, str]:
-    # Paths originate only from app.commands; no user-supplied shell is executed.
-    if not script.is_file() or script.parent != (Path(__file__).resolve().parents[1] / "scripts"):
-        raise ValueError("Script is not in the approved scripts directory")
+@app.post("/api/v1/pairing/claim")
+async def pairing_claim(payload: PairRequest, request: Request):
+    require_same_origin(request)
+    peer = request.client.host if request.client else "unknown"
+    now = time.time()
+    failures = [stamp for stamp in _pair_failures.get(peer, []) if now - stamp < 300]
+    if len(failures) >= 8:
+        raise HTTPException(status_code=429, detail="Too many pairing attempts")
+    result = claim_pairing(payload.pairing_code, payload.device_name.strip())
+    if not result:
+        failures.append(now)
+        _pair_failures[peer] = failures
+        raise HTTPException(status_code=403, detail="Pairing code is invalid, expired or already used")
+    _pair_failures.pop(peer, None)
+    token, device = result
+    response = JSONResponse({
+        "device": {"id": device["id"], "name": device["name"], "paired_at": device["paired_at"]},
+        "session": {"expires_at": device["expires_at"]},
+    })
+    set_session_cookie(response, token)
+    return response
 
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        str(script),
-        cwd=str(script.parent.parent),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+
+@app.post("/api/v1/auth/logout", status_code=204)
+async def logout(request: Request, session=Depends(current_session)):
+    require_same_origin(request)
+    storage.revoke_session(digest(request.cookies.get(COOKIE_NAME, "")), time.time())
+    response = Response(status_code=204)
+    clear_session_cookie(response)
+    return response
+
+
+@app.get("/api/v1/device")
+async def device(session=Depends(current_session)):
+    return {"device": {"id": session["device_id"], "name": session["name"]}, "server": "online"}
+
+
+@app.get("/api/v1/commands")
+async def commands(session=Depends(current_session)):
+    return {"commands": public_commands()}
+
+
+@app.post("/api/v1/commands/{command_id}/runs", status_code=202)
+async def start_run(command_id: str, payload: RunRequest, request: Request, session=Depends(current_session)):
+    require_same_origin(request)
+    command = get_command(command_id)
+    if not command:
+        raise HTTPException(status_code=404, detail="Command not found")
+    if app.state.executor_busy:
+        raise HTTPException(status_code=409, detail="Another command is already running")
+    run_id = "run_" + uuid.uuid4().hex[:20]
+    created = time.time()
+    storage.create_run({"id": run_id, "command_id": command.id, "source": payload.source,
+                        "status": "queued", "created_at": created})
+    storage.audit("command.started", session["device_id"], command.id)
+    app.state.executor_busy = True
+
+    async def task():
+        try:
+            await execute(run_id, command, hub.publish)
+        finally:
+            app.state.executor_busy = False
+
+    asyncio.create_task(task())
+    await hub.publish({"type": "run.updated", "run": {"id": run_id, "status": "queued"}})
+    return {"run": {"id": run_id, "command_id": command.id, "status": "queued", "created_at": created}}
+
+
+@app.get("/api/v1/runs/{run_id}")
+async def get_run(run_id: str, session=Depends(current_session)):
+    row = storage.get_run(run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"run": run_json(row)}
+
+
+@app.get("/api/v1/runs")
+async def recent_runs(limit: int = 20, session=Depends(current_session)):
+    return {"runs": [run_json(row) for row in storage.list_runs(limit)]}
+
+
+@app.websocket("/api/v1/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.cookies.get(COOKIE_NAME)
+    if not token or not storage.get_session(digest(token), time.time()):
+        await websocket.close(code=4401)
+        return
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host", "")
+    if origin:
+        parsed = urlparse(origin)
+        if parsed.netloc != host or parsed.scheme not in {"http", "https"}:
+            await websocket.close(code=4403)
+            return
+    queue = await hub.connect(websocket)
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=12)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.communicate()
-        raise
-    output = (stdout.decode(errors="replace") or stderr.decode(errors="replace")).strip()
-    return process.returncode or 0, output[:1200]
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=25)
+                await websocket.send_json(event)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "server.heartbeat", "at": time.time()})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.disconnect(queue)
 
 
-@app.post("/execute")
-async def execute_command(request: Request):
-    form = await validated_form(request)
-    call_sid = form.get("CallSid", "")
-    caller = form.get("From", "")
-    digit = form.get("Digits", "")
-    response = VoiceResponse()
+@app.get("/", include_in_schema=False)
+async def index():
+    path = frontend_dist / "index.html"
+    if path.is_file():
+        return FileResponse(path)
+    return JSONResponse({"service": "P2C", "message": "Build frontend in frontend/ with npm run build."})
 
-    if not security.caller_allowed(caller) or not security.is_authenticated(call_sid):
-        say(response, "Authentication required. Goodbye.")
-        return end_call(response, call_sid)
 
-    if digit == "9":
-        say(response, "Disconnecting. Goodbye.")
-        return end_call(response, call_sid)
-
-    command = get_command(digit)
-    if command is None:
-        say(response, "Invalid selection. Goodbye.")
-        logger.warning("Rejected command key %r for call %s", digit, call_sid)
-        return end_call(response, call_sid)
-
-    try:
-        exit_code, output = await run_allowlisted_script(command.script)
-        if exit_code == 0:
-            logger.info("Call %s completed task %s: %s", call_sid, command.key, output)
-            say(response, f"The {command.label} task completed successfully.")
-        else:
-            logger.error("Task %s failed for call %s: %s", command.key, call_sid, output)
-            say(response, "The task reported an error. Check the Mac logs.")
-    except asyncio.TimeoutError:
-        logger.error("Task %s timed out for call %s", command.key, call_sid)
-        say(response, "The task timed out.")
-    except Exception:
-        logger.exception("Task %s failed unexpectedly", command.key)
-        say(response, "The task could not be completed.")
-
-    say(response, "Goodbye.")
-    return end_call(response, call_sid)
+@app.get("/{path:path}", include_in_schema=False)
+async def frontend_fallback(path: str):
+    if path.startswith("api/") or path.startswith("assets/"):
+        raise HTTPException(status_code=404, detail="Not found")
+    index_path = frontend_dist / "index.html"
+    if index_path.is_file():
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Frontend is not built")
